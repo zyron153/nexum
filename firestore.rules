@@ -1,0 +1,149 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 3. Path Variable Hardening
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Auth helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return isSignedIn() && getUserData().role == role;
+    }
+
+    // 2. Validation Blueprints
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'name', 'role', 'createdAt']) &&
+             data.keys().size() == 4 &&
+             data.email is string && data.email.size() <= 256 &&
+             data.name is string && data.name.size() <= 128 &&
+             data.role in ['inspector', 'architect', 'pm', 'director'] &&
+             data.createdAt == request.time;
+    }
+
+    function isValidProject(data) {
+      return data.keys().hasAll(['name', 'location', 'status', 'ownerId', 'memberIds', 'createdAt']) &&
+             data.keys().size() == 6 &&
+             data.name is string && data.name.size() <= 256 &&
+             data.location is string && data.location.size() <= 512 &&
+             data.status in ['active', 'completed', 'on-hold'] &&
+             data.ownerId == request.auth.uid &&
+             data.memberIds is list &&
+             data.createdAt == request.time;
+    }
+
+    function isProjectMember(projectId) {
+      let data = get(/databases/$(database)/documents/projects/$(projectId)).data;
+      return isSignedIn() && (
+        (data.keys().contains('memberIds') && request.auth.uid in data.memberIds) ||
+        (data.ownerId == request.auth.uid)
+      );
+    }
+
+    function isValidInspection(data) {
+      return data.keys().hasAll(['projectId', 'inspectorId', 'date', 'status', 'summary', 'createdAt', 'updatedAt']) &&
+             data.projectId is string &&
+             data.inspectorId == request.auth.uid &&
+             isProjectMember(data.projectId) &&
+             data.summary is string && data.summary.size() <= 2000 &&
+             (!data.keys().contains('location') || (data.location is string && data.location.size() <= 512)) &&
+             data.status in ['draft', 'submitted', 'reviewed', 'approved', 'rejected'] &&
+             data.createdAt == request.time &&
+             data.updatedAt == request.time;
+    }
+
+    function isValidInspectionEntry(data, inspectionId) {
+      return data.keys().hasAll(['inspectionId', 'category', 'content', 'metadata', 'photoUrls', 'createdAt']) &&
+             data.inspectionId == inspectionId &&
+             data.category in ['workers', 'equipment', 'area', 'notes'] &&
+             data.content is string && data.content.size() <= 5000 &&
+             data.createdAt == request.time;
+    }
+
+    function isValidParameter(data) {
+      return data.keys().hasAll(['type', 'value', 'label', 'createdAt']) &&
+             data.keys().size() == 4 &&
+             data.type in ['area', 'equipment', 'workers', 'location'] &&
+             data.value is string && data.value.size() <= 256 &&
+             data.label is string && data.label.size() <= 256 &&
+             data.createdAt == request.time;
+    }
+
+    // 1. & 4. Tiered Identity Logic & Master Gate
+    match /test/connection {
+      allow read: if isSignedIn();
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidUser(request.resource.data);
+      allow update: if isSignedIn() && userId == request.auth.uid && 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
+                    request.resource.data.name is string && request.resource.data.name.size() <= 128;
+    }
+
+    match /projects/{projectId} {
+      allow get: if isSignedIn() && isValidId(projectId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidProject(request.resource.data);
+      allow update: if isSignedIn() && isValidId(projectId) && (
+        (resource.data.ownerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'location', 'status']))
+      );
+    }
+
+    match /parameters/{paramId} {
+      allow get: if isSignedIn() && isValidId(paramId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidParameter(request.resource.data);
+      allow delete: if isSignedIn() && isValidId(paramId); // For MVP
+    }
+
+    match /inspections/{inspectionId} {
+      allow get: if isSignedIn() && isValidId(inspectionId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && hasRole('inspector') && isValidInspection(request.resource.data);
+      allow update: if isSignedIn() && isValidId(inspectionId) && (
+        // Inspector: Edit draft or resubmit rejected
+        (hasRole('inspector') && resource.data.inspectorId == request.auth.uid && 
+         resource.data.status in ['draft', 'rejected'] &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['projectId', 'inspectorId', 'date', 'status', 'location', 'summary', 'updatedAt']) &&
+         request.resource.data.projectId == resource.data.projectId &&
+         request.resource.data.inspectorId == resource.data.inspectorId) ||
+        // Architect: Review
+        (hasRole('architect') && resource.data.status == 'submitted' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'architectId', 'updatedAt'])) ||
+        // PM: Approve/Reject
+        (hasRole('pm') && resource.data.status == 'reviewed' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'pmId', 'rejectionReason', 'updatedAt']))
+      );
+    }
+
+    match /inspections/{inspectionId}/entries/{entryId} {
+      allow get, list: if isSignedIn() && isValidId(inspectionId);
+      allow create: if isSignedIn() && isValidId(inspectionId) && isValidId(entryId) &&
+                    isValidInspectionEntry(request.resource.data, inspectionId) &&
+                    getAfter(/databases/$(database)/documents/inspections/$(inspectionId)).data.inspectorId == request.auth.uid;
+      allow update, delete: if isSignedIn() && isValidId(inspectionId) && isValidId(entryId) &&
+                    get(/databases/$(database)/documents/inspections/$(inspectionId)).data.inspectorId == request.auth.uid &&
+                    get(/databases/$(database)/documents/inspections/$(inspectionId)).data.status in ['draft', 'rejected'];
+    }
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System users with specific roles",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["inspector", "architect", "pm", "director"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "name", "role", "createdAt"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Construction projects",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "location": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "completed", "on-hold"] },
+        "ownerId": { "type": "string" },
+        "memberIds": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "status", "ownerId", "memberIds", "createdAt"]
+    },
+    "Inspection": {
+      "title": "Inspection",
+      "description": "Daily or periodic site inspections",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "inspectorId": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["draft", "submitted", "reviewed", "approved", "rejected"] },
+        "summary": { "type": "string" },
+        "location": { "type": "string" },
+        "architectId": { "type": "string" },
+        "pmId": { "type": "string" },
+        "rejectionReason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "inspectorId", "date", "status", "createdAt", "updatedAt"]
+    },
+    "InspectionEntry": {
+      "title": "Inspection Entry",
+      "description": "Specific data point within an inspection (workers, equipment, etc.)",
+      "type": "object",
+      "properties": {
+        "inspectionId": { "type": "string" },
+        "category": { "type": "string", "enum": ["workers", "equipment", "area", "notes"] },
+        "content": { "type": "string" },
+        "metadata": { "type": "object" },
+        "photoUrls": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["inspectionId", "category", "content"]
+    },
+    "Parameter": {
+      "title": "Parameter",
+      "description": "Configurable options for form fields",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "description": "e.g., 'area', 'equipment'" },
+        "value": { "type": "string" },
+        "label": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "value", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Project details"
+    },
+    "/parameters/{paramId}": {
+      "schema": "Parameter",
+      "description": "Form field configuration options"
+    },
+    "/inspections/{inspectionId}": {
+      "schema": "Inspection",
+      "description": "Inspection reports"
+    },
+    "/inspections/{inspectionId}/entries/{entryId}": {
+      "schema": "InspectionEntry",
+      "description": "Detailed entries for an inspection"
+    }
+  }
+}
